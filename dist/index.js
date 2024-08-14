@@ -92,6 +92,7 @@ var import_debug = __toESM(require("debug"));
 // src/node/utils.ts
 var import_path2 = __toESM(require("path"));
 var import_os = __toESM(require("os"));
+var import_node_crypto = require("crypto");
 var INTERNAL_LIST = [CLIENT_PUBLIC_PATH, "/@react-refresh"];
 var cleanUrl = (url) => url.replace(HASH_RE, "").replace(QEURY_RE, "");
 var isCSSRequest = (id) => cleanUrl(id).endsWith(".css");
@@ -127,6 +128,32 @@ function normalizePath(id) {
   return import_path2.default.posix.normalize(isWindows ? slash(id) : id);
 }
 var isWindows = import_os.default.platform() === "win32";
+function getHash(text) {
+  return (0, import_node_crypto.createHash)("sha256").update(text).digest("hex").substring(0, 8);
+}
+function parseVueRequest(id) {
+  const [filename, rawQuery] = id.split(`?`, 2);
+  const query = Object.fromEntries(new URLSearchParams(rawQuery));
+  if (query.vue != null) {
+    query.vue = true;
+  }
+  if (query.index != null) {
+    query.index = Number(query.index);
+  }
+  if (query.raw != null) {
+    query.raw = true;
+  }
+  if (query.url != null) {
+    query.url = true;
+  }
+  if (query.scoped != null) {
+    query.scoped = true;
+  }
+  return {
+    filename,
+    query
+  };
+}
 
 // src/node/optimizer/preBundlePlugin.ts
 var debug = (0, import_debug.default)("dev");
@@ -726,36 +753,69 @@ function reactHMRPlugin() {
 var import_fs_extra6 = require("fs-extra");
 var import_debug3 = __toESM(require("debug"));
 var import_compiler_sfc = require("@vue/compiler-sfc");
+var ignoreList = [
+  "id",
+  "index",
+  "src",
+  "type",
+  "lang",
+  "module",
+  "scoped",
+  "generic"
+];
 var debug3 = (0, import_debug3.default)("dev");
-var doParse = (code, id) => {
-  return (0, import_compiler_sfc.parse)(code, {
+var createDescriptor = (code, id) => {
+  const { descriptor, errors } = (0, import_compiler_sfc.parse)(code, {
     filename: id,
     sourceMap: true
   });
+  descriptor.id = getHash(id);
+  return { descriptor, errors };
 };
-var doScript = (descriptor, id) => {
+function attrsToQuery(attrs, langFallback, forceLangFallback = false) {
+  let query = ``;
+  for (const name in attrs) {
+    const value = attrs[name];
+    if (!ignoreList.includes(name)) {
+      query += `&${encodeURIComponent(name)}${value ? `=${encodeURIComponent(value)}` : ``}`;
+    }
+  }
+  if (langFallback || attrs.lang) {
+    query += `lang` in attrs ? forceLangFallback ? `&lang.${langFallback}` : `&lang.${attrs.lang}` : `&lang.${langFallback}`;
+  }
+  return query;
+}
+var genScriptCode = (descriptor, id) => {
+  const hasScoped = descriptor.styles.some((style) => style.scoped);
   let scriptCode = `const _sfc_main = {}`;
   let map;
   const script = (0, import_compiler_sfc.compileScript)(descriptor, {
-    id,
-    sourceMap: true
+    id: descriptor.id,
+    isProd: false,
+    sourceMap: true,
+    templateOptions: {
+      filename: id,
+      isProd: false,
+      scoped: hasScoped,
+      id: descriptor.id,
+      compilerOptions: {
+        sourceMap: true
+      }
+    }
   });
-  if ((!script.lang || script.lang === "ts") && !script.src) {
-    scriptCode = (0, import_compiler_sfc.rewriteDefault)(script.content, "_sfc_main", script.lang === "ts" ? ["typescript"] : script.lang === "tsx" ? ["typescript", "jsx"] : void 0);
-    map = script.map;
-  } else {
-  }
+  scriptCode = script.content;
+  map = script.map;
   return {
     code: scriptCode,
     map
   };
 };
-var doTemplate = (descriptor, id) => {
-  const hasScoped = descriptor.styles.some((s) => s.scoped);
+var genTemplateCode = (descriptor, id) => {
   const template = descriptor.template;
+  const hasScoped = descriptor.styles.some((style) => style.scoped);
   const result = (0, import_compiler_sfc.compileTemplate)({
     source: template.content,
-    filename: id,
+    filename: descriptor.filename,
     id: descriptor.id,
     scoped: hasScoped,
     compilerOptions: {
@@ -767,6 +827,26 @@ var doTemplate = (descriptor, id) => {
     ...result,
     code: result.code.replace(/\nexport (function|const) (render|ssrRender)/, "\n$1 _sfc_$2")
   };
+};
+var genStyleCode = (descriptor, id) => {
+  let stylesCode = ``;
+  if (descriptor.styles.length) {
+    for (let i = 0; i < descriptor.styles.length; i++) {
+      const style = descriptor.styles[i];
+      const src = style.src || descriptor.filename;
+      const attrsQuery = attrsToQuery(style.attrs, "css");
+      const srcQuery = style.src ? style.scoped ? `&src=${descriptor.id}` : "&src=true" : "";
+      const scopedQuery = style.scoped ? `&scoped=${descriptor.id}` : ``;
+      const query = `?vue&type=style&index=${i}${srcQuery}${scopedQuery}`;
+      const styleRequest = src + query + attrsQuery;
+      if (style.module) {
+      } else {
+        stylesCode += `
+import ${JSON.stringify(styleRequest)}`;
+      }
+    }
+  }
+  return stylesCode;
 };
 function vueHMRPlugin() {
   let serverContext;
@@ -784,16 +864,25 @@ function vueHMRPlugin() {
       }
     },
     async transform(code, id) {
+      const { filename, query } = parseVueRequest(id);
       if (isVue(id) && !id.includes("node_modules")) {
-        const { descriptor, errors } = doParse(code, id);
+        const { descriptor, errors } = createDescriptor(code, id);
         if (errors.length) {
           errors.forEach((error) => debug3(error));
           return null;
         }
-        let { code: scriptCode, map } = doScript(descriptor, id);
-        let { code: templateCode, map: templateMap } = doTemplate(descriptor, id);
-        const hasScoped = descriptor.styles.some((s) => s.scoped);
-        return { code: "1" };
+        let { code: scriptCode, map } = genScriptCode(descriptor, id);
+        let { code: templateCode, map: templateMap } = genTemplateCode(descriptor, id);
+        const stylesCode = genStyleCode(descriptor, id);
+        const output = [scriptCode, templateCode, stylesCode];
+        output.push(`_sfc_main.__hmrId = ${JSON.stringify(descriptor.id)}`);
+        output.push(`typeof __VUE_HMR_RUNTIME__ !== 'undefined' && __VUE_HMR_RUNTIME__.createRecord(_sfc_main.__hmrId, _sfc_main)`);
+        output.push(`import.meta.hot.accept(mod => {`, `  if (!mod) return`, `  const { default: updated, _rerender_only } = mod`, `  if (_rerender_only) {`, `    __VUE_HMR_RUNTIME__.rerender(updated.__hmrId, updated.render)`, `  } else {`, `    __VUE_HMR_RUNTIME__.reload(updated.__hmrId, updated)`, `  }`, `})`);
+        output.push(`export default _sfc_main`);
+        let resolvedCode = output.join("\n");
+        let resolvedMap;
+        const lang = descriptor.scriptSetup?.lang || descriptor.script?.lang;
+        return { code: resolvedCode, map: resolvedMap };
       }
       return null;
     }

@@ -1,5 +1,5 @@
 /** @format */
-
+// 主要就是做热更新用的
 console.log('[vite] connecting...')
 // ws 接收消息
 const socket = new WebSocket(`ws://localhost:__HMR_PORT__`, 'vite-hmr')

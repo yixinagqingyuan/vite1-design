@@ -20,6 +20,7 @@ export function esbuildTransformPlugin(): Plugin {
     async transform(code, id) {
       if (isJSRequest(id)) {
         const extname = path.extname(id).slice(1);
+        // esbuild 转换 js
         const { code: transformedCode, map } = await esbuild.transform(code, {
           target: "esnext",
           format: "esm",

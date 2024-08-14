@@ -3,7 +3,7 @@
 import { CLIENT_PUBLIC_PATH, HASH_RE, JS_TYPES_RE, QEURY_RE } from './constants'
 import path from 'path'
 import os from 'os'
-
+import { createHash } from 'node:crypto'
 const INTERNAL_LIST = [CLIENT_PUBLIC_PATH, '/@react-refresh']
 // 去除 url 中的烂七八的参数？# 等参数
 export const cleanUrl = (url: string): string =>
@@ -54,3 +54,34 @@ export function normalizePath(id: string): string {
   return path.posix.normalize(isWindows ? slash(id) : id)
 }
 export const isWindows = os.platform() === 'win32'
+
+export function getHash(text: string): string {
+  return createHash('sha256').update(text).digest('hex').substring(0, 8)
+}
+
+export function parseVueRequest(id: string): {
+  filename: string
+  query: any
+} {
+  const [filename, rawQuery] = id.split(`?`, 2)
+  const query = Object.fromEntries(new URLSearchParams(rawQuery)) as any
+  if (query.vue != null) {
+    query.vue = true
+  }
+  if (query.index != null) {
+    query.index = Number(query.index)
+  }
+  if (query.raw != null) {
+    query.raw = true
+  }
+  if (query.url != null) {
+    query.url = true
+  }
+  if (query.scoped != null) {
+    query.scoped = true
+  }
+  return {
+    filename,
+    query,
+  }
+}
