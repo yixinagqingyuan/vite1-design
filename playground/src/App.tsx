@@ -8,7 +8,7 @@ function App() {
 
   return (
     <div className="App">
-      11122211122111sssssss122222222sssssssss
+      ssssss
       <header className="App-header">
         <img className="App-logo" src={logo} alt="" />
         <p>Hello Vite + React</p>
