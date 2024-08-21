@@ -3,7 +3,7 @@
 import { Plugin } from '../plugin'
 import path from 'node:path'
 // fs-extra替代 Node内置 fs 模块
-import { readFile } from 'fs-extra'
+import { readFile, writeFile } from 'fs-extra'
 import { ServerContext } from '../server/index'
 import { isVue, getHash, parseVueRequest } from '../utils'
 import createDebug from 'debug'
@@ -14,6 +14,8 @@ import {
   compileScript,
   rewriteDefault,
   SFCBlock,
+  SFCDescriptor,
+  SFCScriptBlock,
 } from '@vue/compiler-sfc'
 declare module '@vue/compiler-sfc' {
   interface SFCDescriptor {
@@ -30,6 +32,37 @@ const ignoreList = [
   'scoped',
   'generic',
 ]
+
+let clientCache = new WeakMap<SFCDescriptor, SFCScriptBlock | null>()
+
+export function getResolvedScript(
+  descriptor: SFCDescriptor,
+): SFCScriptBlock | null | undefined {
+  return (clientCache).get(descriptor)
+}
+
+export function setResolvedScript(
+  descriptor: SFCDescriptor,
+  script: SFCScriptBlock,
+): void {
+  clientCache.set(descriptor, script)
+}
+
+export function resolveTemplateCompilerOptions(
+  descriptor: SFCDescriptor,
+) {
+  const resolvedScript = getResolvedScript(descriptor)
+  const hasScoped = descriptor.styles.some((style) => style.scoped)
+
+  return {
+    scoped: hasScoped,
+    compilerOptions: {
+      sourceMap: true,
+      scopeId: hasScoped ? `data-v-${descriptor.id}` : undefined,
+      bindingMetadata: resolvedScript ? resolvedScript.bindings : undefined,
+    },
+  }
+}
 
 const debug = createDebug('dev')
 const createDescriptor = (code, id) => {
@@ -69,6 +102,7 @@ const genScriptCode = (descriptor, id) => {
   const hasScoped = descriptor.styles.some((style) => style.scoped)
   let scriptCode = `const _sfc_main = {}`
   let map: any
+  // console.log(descriptor,'descriptor')
   const script = compileScript(descriptor, {
     id: descriptor.id,
     isProd: false,
@@ -85,6 +119,7 @@ const genScriptCode = (descriptor, id) => {
   })
   scriptCode = script.content
   map = script.map
+  setResolvedScript(descriptor,script)
   return {
     code: scriptCode,
     map: map as any,
@@ -92,16 +127,12 @@ const genScriptCode = (descriptor, id) => {
 }
 const genTemplateCode = (descriptor, id) => {
   const template = descriptor.template!
-  const hasScoped = descriptor.styles.some((style) => style.scoped)
+
   const result = compileTemplate({
     source: template.content,
     filename: descriptor.filename,
     id: descriptor.id,
-    scoped: hasScoped,
-    compilerOptions: {
-      sourceMap: true,
-      scopeId: hasScoped ? `data-v-${id}` : undefined,
-    },
+    ...resolveTemplateCompilerOptions(descriptor),
   })
   return {
     ...result,
@@ -163,6 +194,14 @@ export function vueHMRPlugin(): Plugin {
         }
         // 处理 js
         let { code: scriptCode, map } = genScriptCode(descriptor, id)
+        // const outFileName = id;
+        // const dir = path.dirname(id);
+        // const ext = path.extname(id);
+        // const baseName = path.basename(id, ext);
+        // const newFileName = `${baseName}.debug.js`;
+        // const newPath = path.join(dir, newFileName);
+        // await writeFile(newPath, scriptCode);
+        scriptCode = scriptCode.replace("export default", "const _sfc_main =");
         // 处理 template
         let { code: templateCode, map: templateMap } = genTemplateCode(
           descriptor,
@@ -188,6 +227,7 @@ export function vueHMRPlugin(): Plugin {
           `})`,
         )
 
+        output.push(`_sfc_main.render = _sfc_render`);
         output.push(`export default _sfc_main`)
 
         let resolvedCode = output.join('\n')

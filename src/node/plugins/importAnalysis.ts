@@ -11,6 +11,7 @@ import {
   getShortName,
   isInternalRequest,
   isJSRequest,
+  isVue,
   isWindows,
   normalizePath,
 } from '../utils'
@@ -27,8 +28,9 @@ export function importAnalysisPlugin(): Plugin {
       serverContext = s
     },
     async transform(code: string, id: string) {
-      if (!isJSRequest(id) || isInternalRequest(id)) {
-        return null
+      
+      if ((!isJSRequest(id) || isInternalRequest(id)) && !isVue(id)) {
+        return null;
       }
       await init
       const importedModules = new Set<string>()

@@ -14,6 +14,7 @@ export function resolvePlugin(): Plugin {
       serverContext = s;
     },
     async resolveId(id: string, importer?: string) {
+      // console.log(id,'resolveId')
       id = removeImportQuery(cleanUrl(id));
       if (isInternalRequest(id)) {
         return null;

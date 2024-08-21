@@ -6,7 +6,7 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   throw new Error('Dynamic require of "' + x + '" is not supported');
 });
 
-// node_modules/.pnpm/tsup@5.12.6_postcss@8.4.41_typescript@4.6.4/node_modules/tsup/assets/esm_shims.js
+// node_modules/.pnpm/tsup@5.12.6_typescript@4.6.4/node_modules/tsup/assets/esm_shims.js
 import { fileURLToPath } from "url";
 import path from "path";
 var getFilename = () => fileURLToPath(import.meta.url);
@@ -511,7 +511,7 @@ function importAnalysisPlugin() {
       serverContext = s;
     },
     async transform(code, id) {
-      if (!isJSRequest(id) || isInternalRequest(id)) {
+      if ((!isJSRequest(id) || isInternalRequest(id)) && !isVue(id)) {
         return null;
       }
       await init2;
@@ -766,6 +766,25 @@ var ignoreList = [
   "scoped",
   "generic"
 ];
+var clientCache = /* @__PURE__ */ new WeakMap();
+function getResolvedScript(descriptor) {
+  return clientCache.get(descriptor);
+}
+function setResolvedScript(descriptor, script) {
+  clientCache.set(descriptor, script);
+}
+function resolveTemplateCompilerOptions(descriptor) {
+  const resolvedScript = getResolvedScript(descriptor);
+  const hasScoped = descriptor.styles.some((style) => style.scoped);
+  return {
+    scoped: hasScoped,
+    compilerOptions: {
+      sourceMap: true,
+      scopeId: hasScoped ? `data-v-${descriptor.id}` : void 0,
+      bindingMetadata: resolvedScript ? resolvedScript.bindings : void 0
+    }
+  };
+}
 var debug3 = createDebug3("dev");
 var createDescriptor = (code, id) => {
   const { descriptor, errors } = parse3(code, {
@@ -808,6 +827,7 @@ var genScriptCode = (descriptor, id) => {
   });
   scriptCode = script.content;
   map = script.map;
+  setResolvedScript(descriptor, script);
   return {
     code: scriptCode,
     map
@@ -815,16 +835,11 @@ var genScriptCode = (descriptor, id) => {
 };
 var genTemplateCode = (descriptor, id) => {
   const template = descriptor.template;
-  const hasScoped = descriptor.styles.some((style) => style.scoped);
   const result = compileTemplate({
     source: template.content,
     filename: descriptor.filename,
     id: descriptor.id,
-    scoped: hasScoped,
-    compilerOptions: {
-      sourceMap: true,
-      scopeId: hasScoped ? `data-v-${id}` : void 0
-    }
+    ...resolveTemplateCompilerOptions(descriptor)
   });
   return {
     ...result,
@@ -875,12 +890,14 @@ function vueHMRPlugin() {
           return null;
         }
         let { code: scriptCode, map } = genScriptCode(descriptor, id);
+        scriptCode = scriptCode.replace("export default", "const _sfc_main =");
         let { code: templateCode, map: templateMap } = genTemplateCode(descriptor, id);
         const stylesCode = genStyleCode(descriptor, id);
         const output = [scriptCode, templateCode, stylesCode];
         output.push(`_sfc_main.__hmrId = ${JSON.stringify(descriptor.id)}`);
         output.push(`typeof __VUE_HMR_RUNTIME__ !== 'undefined' && __VUE_HMR_RUNTIME__.createRecord(_sfc_main.__hmrId, _sfc_main)`);
         output.push(`import.meta.hot.accept(mod => {`, `  if (!mod) return`, `  const { default: updated, _rerender_only } = mod`, `  if (_rerender_only) {`, `    __VUE_HMR_RUNTIME__.rerender(updated.__hmrId, updated.render)`, `  } else {`, `    __VUE_HMR_RUNTIME__.reload(updated.__hmrId, updated)`, `  }`, `})`);
+        output.push(`_sfc_main.render = _sfc_render`);
         output.push(`export default _sfc_main`);
         let resolvedCode = output.join("\n");
         let resolvedMap;
@@ -934,7 +951,9 @@ function indexHtmlMiddware(serverContext) {
 // src/node/server/middlewares/static.ts
 import sirv from "sirv";
 function staticMiddleware(root) {
+  const root2 = root + "/public";
   const serveFromRoot = sirv(root, { dev: true });
+  const serveFromRoot2 = sirv(root2, { dev: true });
   return async (req, res, next) => {
     if (!req.url) {
       return;
@@ -942,7 +961,9 @@ function staticMiddleware(root) {
     if (isImportRequest(req.url) || req.url === CLIENT_PUBLIC_PATH) {
       return;
     }
-    serveFromRoot(req, res, next);
+    serveFromRoot(req, res, () => {
+      serveFromRoot2(req, res, next);
+    });
   };
 }
 

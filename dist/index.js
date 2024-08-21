@@ -512,7 +512,7 @@ function importAnalysisPlugin() {
       serverContext = s;
     },
     async transform(code, id) {
-      if (!isJSRequest(id) || isInternalRequest(id)) {
+      if ((!isJSRequest(id) || isInternalRequest(id)) && !isVue(id)) {
         return null;
       }
       await import_es_module_lexer2.init;
@@ -763,6 +763,25 @@ var ignoreList = [
   "scoped",
   "generic"
 ];
+var clientCache = /* @__PURE__ */ new WeakMap();
+function getResolvedScript(descriptor) {
+  return clientCache.get(descriptor);
+}
+function setResolvedScript(descriptor, script) {
+  clientCache.set(descriptor, script);
+}
+function resolveTemplateCompilerOptions(descriptor) {
+  const resolvedScript = getResolvedScript(descriptor);
+  const hasScoped = descriptor.styles.some((style) => style.scoped);
+  return {
+    scoped: hasScoped,
+    compilerOptions: {
+      sourceMap: true,
+      scopeId: hasScoped ? `data-v-${descriptor.id}` : void 0,
+      bindingMetadata: resolvedScript ? resolvedScript.bindings : void 0
+    }
+  };
+}
 var debug3 = (0, import_debug3.default)("dev");
 var createDescriptor = (code, id) => {
   const { descriptor, errors } = (0, import_compiler_sfc.parse)(code, {
@@ -805,6 +824,7 @@ var genScriptCode = (descriptor, id) => {
   });
   scriptCode = script.content;
   map = script.map;
+  setResolvedScript(descriptor, script);
   return {
     code: scriptCode,
     map
@@ -812,16 +832,11 @@ var genScriptCode = (descriptor, id) => {
 };
 var genTemplateCode = (descriptor, id) => {
   const template = descriptor.template;
-  const hasScoped = descriptor.styles.some((style) => style.scoped);
   const result = (0, import_compiler_sfc.compileTemplate)({
     source: template.content,
     filename: descriptor.filename,
     id: descriptor.id,
-    scoped: hasScoped,
-    compilerOptions: {
-      sourceMap: true,
-      scopeId: hasScoped ? `data-v-${id}` : void 0
-    }
+    ...resolveTemplateCompilerOptions(descriptor)
   });
   return {
     ...result,
@@ -872,12 +887,14 @@ function vueHMRPlugin() {
           return null;
         }
         let { code: scriptCode, map } = genScriptCode(descriptor, id);
+        scriptCode = scriptCode.replace("export default", "const _sfc_main =");
         let { code: templateCode, map: templateMap } = genTemplateCode(descriptor, id);
         const stylesCode = genStyleCode(descriptor, id);
         const output = [scriptCode, templateCode, stylesCode];
         output.push(`_sfc_main.__hmrId = ${JSON.stringify(descriptor.id)}`);
         output.push(`typeof __VUE_HMR_RUNTIME__ !== 'undefined' && __VUE_HMR_RUNTIME__.createRecord(_sfc_main.__hmrId, _sfc_main)`);
         output.push(`import.meta.hot.accept(mod => {`, `  if (!mod) return`, `  const { default: updated, _rerender_only } = mod`, `  if (_rerender_only) {`, `    __VUE_HMR_RUNTIME__.rerender(updated.__hmrId, updated.render)`, `  } else {`, `    __VUE_HMR_RUNTIME__.reload(updated.__hmrId, updated)`, `  }`, `})`);
+        output.push(`_sfc_main.render = _sfc_render`);
         output.push(`export default _sfc_main`);
         let resolvedCode = output.join("\n");
         let resolvedMap;
@@ -931,7 +948,9 @@ function indexHtmlMiddware(serverContext) {
 // src/node/server/middlewares/static.ts
 var import_sirv = __toESM(require("sirv"));
 function staticMiddleware(root) {
+  const root2 = root + "/public";
   const serveFromRoot = (0, import_sirv.default)(root, { dev: true });
+  const serveFromRoot2 = (0, import_sirv.default)(root2, { dev: true });
   return async (req, res, next) => {
     if (!req.url) {
       return;
@@ -939,7 +958,9 @@ function staticMiddleware(root) {
     if (isImportRequest(req.url) || req.url === CLIENT_PUBLIC_PATH) {
       return;
     }
-    serveFromRoot(req, res, next);
+    serveFromRoot(req, res, () => {
+      serveFromRoot2(req, res, next);
+    });
   };
 }
 
